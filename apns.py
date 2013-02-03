@@ -26,9 +26,9 @@
 from binascii import a2b_hex, b2a_hex
 from datetime import datetime, timedelta
 from time import mktime
-from random import getrandbits
 from socket import socket, AF_INET, SOCK_STREAM
 from struct import pack, unpack
+import select
 
 try:
     from ssl import wrap_socket
@@ -319,27 +319,28 @@ class GatewayConnection(APNsConnection):
 
         return notification
 
-    def send_notification(self, token_hex, payload, expiry=None):
+    def send_notification(self, token_hex, payload, identifier, expiry=None):
+
         if expiry is None:
             expiry = datetime.now() + timedelta(30)
-        
-        identifier = pack('>I', getrandbits(32))
+
         self.write(self._get_notification(token_hex, payload, identifier, expiry))
-        
-        error_response = self.read(6)
-        if error_response != '':
-            command = error_response[0]
-            status = ord(error_response[1])
-            response_identifier = error_response[2:6]
-            
-            if command != '\x08' or response_identifier != identifier:
-                raise UnknownResponse()
-            
-            if status == 0:
-                return
-            
-            raise {1: ProcessingError,
-                   5: InvalidTokenSizeError,
-                   7: InvalidPayloadSizeError,
-                   8: InvalidTokenError}.get(status, UnknownError)()
+
+    def send_error_listen(self, timeout=2):
+
+        identifier = None
+        status_code = None
+
+        self._socket.setblocking(0)
+
+        ready = select.select([self._socket], [], [], timeout)
+
+        if ready[0]:
+            error_response = self.read(6)
+
+            if error_response != '':
+                status_code = ord(error_response[1])
+                identifier = error_response[2:6]
+
+        return identifier, status_code
 
